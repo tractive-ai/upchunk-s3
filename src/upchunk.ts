@@ -186,7 +186,7 @@ type UpchunkEvent = CustomEvent & Event<EventName>;
 type AllowedMethods = 'PUT' | 'POST' | 'PATCH';
 
 export interface UpChunkOptions {
-  endpoint: string | ((file?: File) => Promise<string>);
+  endpoint: string | ((partNumber: number, file?: File) => Promise<string>);
   file: File;
   method?: AllowedMethods;
   headers?: XhrHeaders | (() => XhrHeaders) | (() => Promise<XhrHeaders>);
@@ -205,7 +205,7 @@ export class UpChunk {
     return new UpChunk(options);
   }
 
-  public endpoint: string | ((file?: File) => Promise<string>);
+  public endpoint: string | ((partNumber: number, file?: File) => Promise<string>);
   public file: File;
   public headers: XhrHeaders | (() => XhrHeaders) | (() => Promise<XhrHeaders>);
   public method: AllowedMethods;
@@ -264,7 +264,7 @@ export class UpChunk {
     this.eventTarget = new EventTarget();
 
     this.validateOptions();
-    this.getEndpoint().then(() => this.sendChunks());
+    this.sendChunks();
 
     // restart sync when back online
     // trigger events when offline/back online
@@ -439,13 +439,13 @@ export class UpChunk {
   /**
    * Endpoint can either be a URL or a function that returns a promise that resolves to a string.
    */
-  private getEndpoint() {
+  private getEndpoint(partNumber: number) {
     if (typeof this.endpoint === 'string') {
       this.endpointValue = this.endpoint;
       return Promise.resolve(this.endpoint);
     }
-
-    return this.endpoint(this.file).then((value) => {
+  
+    return this.endpoint(partNumber, this.file).then((value) => {
       this.endpointValue = value;
       return this.endpointValue;
     });
@@ -497,6 +497,10 @@ export class UpChunk {
       'Content-Range': `bytes ${rangeStart}-${rangeEnd}/${this.file.size}`,
     };
 
+    // Update the endpoint for each chunk
+    const partNumber = this.chunkCount + 1; // partNumber is not 0-indexed
+    const endpointUrl = await this.getEndpoint(partNumber);
+
     this.dispatch('attempt', {
       chunkNumber: this.chunkCount,
       totalChunks: this.totalChunks,
@@ -505,7 +509,7 @@ export class UpChunk {
 
     return this.xhrPromise({
       headers,
-      url: this.endpointValue,
+      url: endpointUrl,
       method: this.method,
       body: chunk,
     });
@@ -520,6 +524,7 @@ export class UpChunk {
         (lastChunkEnd.getTime() - this.lastChunkStart.getTime()) / 1000;
 
       this.dispatch('chunkSuccess', {
+        partNumber: this.chunkCount + 1,
         chunk: this.chunkCount,
         chunkSize: this.chunkSize,
         attempts: this.attemptCount,
